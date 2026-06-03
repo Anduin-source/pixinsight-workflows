@@ -1,0 +1,787 @@
+================================================================================
+  WORKFLOW LRGB v2 — PixInsight 1.9+
+  Setup 1: Takahashi Epsilon 160ED + ASI6200MM — Pier 1
+  Observatório X93 — Munhoz, MG, Brasil
+
+  Mudanças v1 → v2:
+    • BXT Correct Only adicionado antes de SPCC (recomendação RC Astro p/ AI4+)
+    • Re-solve astrométrico após Correct Only
+    • Star Separation (StarXTerminator) em estado linear após SPCC
+    • Processamento independente de starless e stars
+    • Recombinação via screen blending em PixelMath
+    • Máscaras (Luminance, Star, Range) integradas ao fluxo
+    • Critério MGC vs GC revisado para hemisfério sul (verificar cobertura,
+      não cortar por regra fixa de declinação)
+================================================================================
+
+
+════════════════════════════════════════════════════════════════════════════════
+  1. CANAL RGB — Processamento Linear, Star Separation e Stretch
+════════════════════════════════════════════════════════════════════════════════
+
+  #    Etapa                          Ferramenta                Observações
+  ─────────────────────────────────────────────────────────────────────────────
+  1    Stack + Crop + Plate Solving   WBPP                      Masters lineares com WCS embutido e bordas
+                                                                limpas. Verificar presença de WCS antes de
+                                                                continuar.
+
+  2    BXT Correct Only (canais R,    BlurXTerminator           Sharpen Stars = 0
+       G, B SEPARADOS antes do                                  Sharpen Nonstellar = 0
+       ChannelCombination)                                      Correct Only = MARCADO
+                                                                Aplicar em cada master mono.
+                                                                Corrige aberrações sem sharpening.
+                                                                Pré-requisito p/ SPCC mais preciso e
+                                                                ImageSolver com solução melhor.
+
+  3    Re-solve astrometria           ImageSolver               Após Correct Only, PSFs ficam centradas e
+                                                                a solução astrométrica fica mais precisa.
+                                                                Ganho mensurável p/ SPFC/MGC/SPCC.
+
+  4    Inspecionar bordas             Visual                    DynamicCrop manual se sobraram artefatos
+                                                                de borda.
+
+  5    LinearFit entre R, G, B        LinearFit                 Referência = G. Maior SNR, menor
+                                                                contaminação por poluição luminosa.
+
+  6    Channel Combination            ChannelCombination        Gera RGB linear.
+                                                                NÃO usar LRGBCombination aqui —
+                                                                opera em espaço Lab, inadequado para
+                                                                dados lineares.
+
+  7    Calibração de fluxo            SPFC                      Pré-requisito do MGC. Mesmo que vá usar
+                                                                GC, não prejudica. Ver config. SPFC.
+
+  8    Gradient Correction            MGC ou GC                 Ver tabela de decisão revisada (5.1).
+                                                                Para Munhoz (Dec ~-22°): verificar
+                                                                cobertura MARS no MGC tool ANTES de
+                                                                decidir — não cortar por regra fixa.
+
+  9    Calibração de cor              SPCC                      Sempre após gradient correction.
+                                                                Ver config. SPCC (4.2).
+
+  ───────────────────────────────────────────────────────────────────────────
+  PONTO DE BIFURCAÇÃO: STAR SEPARATION
+  Decidir aqui se vai separar estrelas ou seguir caminho monolítico.
+  Ver seção 5.5 para critério de decisão por tipo de alvo.
+  ───────────────────────────────────────────────────────────────────────────
+
+  10   StarXTerminator linear         StarXTerminator           Generate star image = MARCADO
+       (apenas se NÃO for aglomerado)                           Unscreen Stars = DESMARCADO
+                                                                  (Unscreen é p/ stretched, não linear)
+                                                                Large Overlap = MARCADO para wide-field
+                                                                  (Epsilon 160 = wide-field, marcar)
+                                                                NÃO aplicar STF Auto-Stretch na imagem
+                                                                  stars depois — destrói parâmetros STF
+                                                                  transferidos pelo SXT.
+                                                                Resultado: RGB_starless + RGB_stars
+                                                                  (renomear claramente p/ não confundir)
+
+  ───── Daqui em diante, fluxo paralelo: RGB_starless e RGB_stars ─────
+
+  11s  BXT sharpening RGB_starless    BlurXTerminator           Sem estrelas → pode ser mais agressivo
+                                                                Sharpen Nonstellar = 0.50-0.60
+                                                                Sharpen Stars = N/A (sem estrelas)
+                                                                Automatic PSF = MARCADO
+                                                                (Caso NÃO tenha separado, usar valores
+                                                                 v1 originais: Nonstellar 0.40-0.50)
+
+  11r  BXT skipped no RGB_stars       —                         NÃO aplicar BXT nas estrelas separadas.
+                                                                Perfil estelar deve permanecer
+                                                                preservado para recombinação limpa.
+
+  12s  NXT no RGB_starless            NoiseXTerminator          Intensity/Color Separation = MARCADO
+                                                                Denoise = 0.85-0.90 (mais agressivo)
+                                                                Iterations = 1
+                                                                Sem estrelas → menos risco de halos.
+
+  12r  NXT no RGB_stars               NoiseXTerminator          Intensity/Color Separation = MARCADO
+                                                                Denoise = 0.40-0.50 (conservador)
+                                                                Iterations = 1
+                                                                Estrelas isoladas têm pouco ruído
+                                                                relevante — não exagerar.
+
+  13s  Stretch RGB_starless           MultiscaleAdaptiveStretch Target background = 0.12-0.15
+                                                                ANOTAR valor — usar o mesmo no L.
+                                                                Contrast Recovery Intensity = 0.50-0.60
+                                                                Scale separation = 512
+                                                                Color Saturation = MARCADO
+
+  13r  Stretch RGB_stars              MultiscaleAdaptiveStretch Target background = MESMO do starless
+                                                                Aggressiveness = 0.50 (mais suave)
+                                                                Color Saturation = MARCADO
+                                                                Alternativa: GHS leve preservando cor
+                                                                Objetivo: estrelas estiradas SEM inflar
+                                                                excessivamente.
+
+  14   SCNR no RGB_starless           SCNR                      Color = Green
+                                                                Method = Average Neutral
+                                                                Amount = 0.70-0.80
+                                                                Preserve lightness = MARCADO
+                                                                Aplicar SOMENTE no starless.
+                                                                Em RGB_stars o SCNR pode degradar
+                                                                cor de estrelas amareladas — pular ou
+                                                                usar amount 0.3 com star mask invertida.
+
+  15   Criar Luminance Mask do        ChannelExtraction + HT    Ver seção 6 (Máscaras). Reservar para
+       RGB_starless                                             passos 16-17.
+
+  16   Curves criativos RGB_starless  CurvesTransformation      COM Luminance Mask ativa.
+                                                                Contraste no objeto sem afetar fundo.
+                                                                Boost de saturação restrito ao objeto.
+
+  17   ColorSaturation RGB_starless   ColorSaturation           COM Luminance Mask ativa.
+                                                                Ajustes finos de hue por faixa.
+
+  18   Recombinação starless+stars    PixelMath                 Expression (single RGB/K channel):
+                                                                  combined = 1 - (1-$T) * (1-stars)
+                                                                Aplicar com $T = RGB_starless e
+                                                                  "stars" = RGB_stars
+                                                                NÃO usar soma simples — overflow em
+                                                                  núcleos saturados causa ringing.
+                                                                Screen blending preserva valores ≤1.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  2. CANAL L — Processamento Linear, Star Separation e Stretch
+════════════════════════════════════════════════════════════════════════════════
+
+  #    Etapa                          Ferramenta                Observações
+  ─────────────────────────────────────────────────────────────────────────────
+  1    Stack + Crop + Plate Solving   WBPP                      Mesmo template, mesmo frame de
+                                                                referência dos canais RGB.
+
+  2    BXT Correct Only no L          BlurXTerminator           Sharpen Stars = 0
+                                                                Sharpen Nonstellar = 0
+                                                                Correct Only = MARCADO
+                                                                Mesma justificativa do RGB.
+
+  3    Re-solve astrometria           ImageSolver               Mesma justificativa.
+
+  4    Inspecionar bordas             Visual                    DynamicCrop manual se necessário.
+
+  5    Calibração de fluxo            SPFC                      Somente se usar MGC.
+                                                                Mesma configuração do RGB.
+
+  6    Gradient Correction            MGC ou GC                 Mesma escolha do RGB.
+                                                                Para M6 e objetos no plano galáctico
+                                                                sul: GC é praticamente certo.
+
+  ───────────────────────────────────────────────────────────────────────────
+  PONTO DE BIFURCAÇÃO: STAR SEPARATION
+  Mesma decisão do RGB. Se separou no RGB, separar no L. Se não, não.
+  ───────────────────────────────────────────────────────────────────────────
+
+  7    StarXTerminator linear no L    StarXTerminator           Generate star image = MARCADO
+       (apenas se NÃO for aglomerado)                           Unscreen Stars = DESMARCADO
+                                                                Large Overlap = MARCADO (Epsilon = wide)
+                                                                Resultado: L_starless + L_stars
+
+  ───── Daqui em diante, fluxo paralelo: L_starless e L_stars ─────
+
+  8s   BXT sharpening L_starless      BlurXTerminator           Sharpen Nonstellar = 0.80-0.95
+                                                                  (mais forte que v1; sem estrelas
+                                                                   o risco de artefato cai muito)
+                                                                Sharpen Stars = N/A
+                                                                Automatic PSF = MARCADO
+                                                                (Caso NÃO tenha separado, usar valores
+                                                                 v1 originais: Stars 0.50-0.70,
+                                                                 Nonstellar 0.70-0.90)
+
+  8r   BXT skipped no L_stars         —                         Preservar perfil estelar.
+
+  9s   NXT no L_starless              NoiseXTerminator          Intensity/Color Sep = DESMARCADO (mono)
+                                                                Denoise = 0.65-0.70 (conservador)
+                                                                Iterations = 1
+                                                                Sem estrelas, mas L carrega detalhe —
+                                                                manter conservador.
+
+  9r   NXT no L_stars                 NoiseXTerminator          Intensity/Color Sep = DESMARCADO
+                                                                Denoise = 0.30-0.40 (muito conservador)
+                                                                Iterations = 1
+                                                                Quase pular se estrelas estão limpas.
+
+  10s  Stretch L_starless             MultiscaleAdaptiveStretch Target background = MESMO VALOR DO
+                                                                  RGB_starless (ex: 0.150)
+                                                                Contrast Recovery Intensity = 0.50
+                                                                Scale separation = 512
+                                                                Color Saturation = DESMARCADO (mono)
+
+  10r  Stretch L_stars                MultiscaleAdaptiveStretch Target background = MESMO do starless
+                                                                Aggressiveness = 0.50 (suave)
+                                                                Color Saturation = DESMARCADO
+
+  11   Criar Luminance Mask do        Duplicate + HT/STF        Ver seção 6.
+       L_starless stretched
+
+  12   Curves L_starless              CurvesTransformation      COM Luminance Mask ativa.
+                                                                Contraste e detalhe local.
+
+  13   LHE no L_starless              LocalHistogramEqualization COM Luminance Mask ativa.
+                                                                Amount BAIXO (0.10-0.20) — fácil exagerar.
+                                                                Sem máscara o LHE inflará ruído
+                                                                de fundo.
+
+  14   Recombinação L_starless +      PixelMath                 Expression:
+       L_stars                                                    combined = 1 - (1-$T) * (1-L_stars)
+                                                                Aplicar com $T = L_starless e
+                                                                  "L_stars" = L_stars
+
+  15   LinearFit L_final → RGB_final  LinearFit                 Referência = luminância extraída
+       (opcional)                                                 do RGB_final.
+                                                                Reject High = 0.85
+                                                                Pode ser omitido se MAS alinhou os
+                                                                  backgrounds com mesmo Target bg.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  3. COMBINAÇÃO FINAL
+════════════════════════════════════════════════════════════════════════════════
+
+  #   Etapa             Ferramenta             Observações
+  ─────────────────────────────────────────────────────────────────────────────
+  1   Fusão L + RGB     LRGBCombination        Apenas L marcado, R/G/B desmarcados.
+                                               Chrominance NR = ATIVADO
+                                               Saturation = 0.5
+                                               Aplicar sobre o RGB_final.
+                                               NÃO usar ChannelCombination aqui — Lab vs RGB.
+
+  2   Criar Star Mask   PixelMath/             Usar L_stars ou RGB_stars como base.
+      final             Convolution/Curves     Stretchar para alto contraste.
+                                               Reservar p/ passos 3-5.
+
+  3   Ajuste de cor de  CurvesTransformation   COM Star Mask ativa.
+      estrelas          + ColorSaturation      Aumentar saturação só nas estrelas é particularmente
+                                               eficaz — cor estelar é diagnóstico astrofísico
+                                               (azul=jovem/quente, laranja=fria/idosa).
+
+  4   Redução de        MorphologicalTransform COM Star Mask ativa.
+      tamanho estrelas  (Erosion)              Amount baixo (0.05-0.15).
+      (opcional)                               Fácil exagerar — estrelas ficam pontilhadas.
+
+  5   Curves finais     CurvesTransformation   COM Luminance Mask conforme necessário.
+                                               Saturação, hue, contraste final.
+
+  6   Background final  ACDNR ou MMT           Em chrominance, COM Luminance Mask invertida.
+      cleanup (opc.)                           Limpa ruído colorido residual do fundo
+                                               sem afetar objeto.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  4. CONFIGURAÇÕES DO SETUP — Epsilon 160ED + ASI6200MM
+════════════════════════════════════════════════════════════════════════════════
+
+  ── 4.1 SpectrophotometricFluxCalibration (SPFC) ─────────────────────────────
+  [INALTERADO em relação a v1]
+
+    Campo                      Valor                            Observação
+    ──────────────────────────────────────────────────────────────────────────
+    QE curve                   Sony IMX411/455/461/533/571      Sensor IMX455 da ASI6200MM
+    Gray filter                Astronomik UV-IR Block L-2       Melhor opção para Chroma L
+    Red filter                 Chroma R
+    Green filter               Chroma G
+    Blue filter                Chroma B
+    Narrowband filters mode    Desmarcado                       LRGB broadband
+    Generate graphs            Marcado                          Verificar qualidade da calibração
+    Catalog                    Gaia DR3/SP
+    Automatic limit magnitude  Marcado
+
+
+  ── 4.2 SpectrophotometricColorCalibration (SPCC) ────────────────────────────
+  [INALTERADO em relação a v1]
+
+    Campo                      Valor                            Observação
+    ──────────────────────────────────────────────────────────────────────────
+    QE curve                   Sony IMX411/455/461/533/571      Mesmo do SPFC
+    Red filter                 Chroma R
+    Green filter               Chroma G
+    Blue filter                Chroma B
+    White reference            Photon Flux                      Para aglomerados estelares
+                               Average Spiral Galaxy            Para nebulosas e galáxias
+    Background Neutralization  Marcado                          Neutraliza fundo na calibração
+    Catalog                    Gaia DR3/SP
+    Automatic limit magnitude  Marcado
+    Narrowband filters mode    Desmarcado
+
+
+  ── 4.3 BlurXTerminator ──────────────────────────────────────────────────────
+  [REVISADO — adiciona Correct Only e diferencia starless/no-separation]
+
+    Aplicação              Parâmetro              Valor
+    ──────────────────────────────────────────────────────────────────────────
+    Correct Only           Sharpen Stars          0.00
+    (todos os canais)      Sharpen Nonstellar     0.00
+                           Correct Only           MARCADO
+                           Automatic PSF          MARCADO
+
+    Sharpening RGB         Sharpen Stars          N/A (sem estrelas)
+    (starless)             Sharpen Nonstellar     0.50-0.60
+                           Correct Only           Desmarcado
+                           Automatic PSF          MARCADO
+
+    Sharpening L           Sharpen Stars          N/A
+    (starless)             Sharpen Nonstellar     0.80-0.95
+                           Correct Only           Desmarcado
+                           Automatic PSF          MARCADO
+
+    Sharpening RGB         Sharpen Stars          0.25
+    (sem star sep)         Sharpen Nonstellar     0.40-0.50
+                           Automatic PSF          MARCADO
+
+    Sharpening L           Sharpen Stars          0.50-0.70
+    (sem star sep)         Sharpen Nonstellar     0.70-0.90
+                           Automatic PSF          MARCADO
+
+    BXT em estrelas        —                      NUNCA aplicar BXT na imagem stars
+    separadas                                     separada. Preservar perfil estelar.
+
+
+  ── 4.4 NoiseXTerminator ─────────────────────────────────────────────────────
+  [REVISADO — adiciona valores para stars separados]
+
+    Aplicação                  Param. principal          Valor
+    ──────────────────────────────────────────────────────────────────────────
+    RGB starless               Intensity/Color Sep        MARCADO
+                               Denoise                    0.85-0.90
+                               Iterations                 1
+
+    RGB stars                  Intensity/Color Sep        MARCADO
+                               Denoise                    0.40-0.50
+                               Iterations                 1
+
+    L starless                 Intensity/Color Sep        DESMARCADO (mono)
+                               Denoise                    0.65-0.70
+                               Iterations                 1
+
+    L stars                    Intensity/Color Sep        DESMARCADO
+                               Denoise                    0.30-0.40
+                               Iterations                 1
+
+    RGB (sem star sep)         Intensity/Color Sep        MARCADO
+                               Denoise                    0.80-0.90
+                               Iterations                 1
+
+    L (sem star sep)           Intensity/Color Sep        DESMARCADO
+                               Denoise                    0.65-0.70
+                               Iterations                 1
+
+
+  ── 4.5 MultiscaleAdaptiveStretch (MAS) ──────────────────────────────────────
+  [REVISADO — valores específicos para starless/stars]
+
+    Aplicação            Target bg     Aggressiveness    Color Saturation
+    ──────────────────────────────────────────────────────────────────────────
+    RGB starless         0.12-0.15     0.70              MARCADO
+    RGB stars            mesmo         0.50              MARCADO
+    L starless           mesmo         0.70              DESMARCADO (mono)
+    L stars              mesmo         0.50              DESMARCADO
+    RGB (sem star sep)   0.12-0.15     0.70              MARCADO
+    L (sem star sep)     mesmo         0.70              DESMARCADO
+
+    Para TODOS: Dynamic range compression = 0.40
+                Contrast Recovery = MARCADO
+                Intensity = 0.50-0.60
+                Scale separation = 512
+
+    REGRA CRÍTICA: TODAS as variantes do MESMO projeto usam o MESMO
+                   Target background. Garante compatibilidade no
+                   LRGBCombination e nas recombinações via PixelMath.
+
+
+  ── 4.6 StarXTerminator ──────────────────────────────────────────────────────
+  [NOVA SEÇÃO]
+
+    Aplicação                  Parâmetro                  Valor
+    ──────────────────────────────────────────────────────────────────────────
+    Linear (RGB e L)           Generate Star Image        MARCADO
+                               Unscreen Stars             DESMARCADO
+                                                          (Unscreen é p/ stretched)
+                               Large Overlap              MARCADO (wide-field)
+                               Stride                     128 (default OK p/
+                                                          Epsilon 160)
+
+    PÓS-APLICAÇÃO:
+      • NÃO aplicar STF Auto-Stretch na imagem stars resultante.
+      • SXT transfere os parâmetros STF do original — preservar.
+      • Renomear imediatamente:
+          - "M51_RGB_linear" → mantém referência
+          - "M51_RGB_starless_linear" → starless gerado
+          - "M51_RGB_stars_linear"   → stars gerado
+      • Documentar versão do AI usado (importante p/ reprocessamento).
+
+
+════════════════════════════════════════════════════════════════════════════════
+  5. TABELAS DE REFERÊNCIA
+════════════════════════════════════════════════════════════════════════════════
+
+  ── 5.1 Decisão MGC vs GC (REVISADA para hemisfério sul) ─────────────────────
+
+    Critério              Use MGC                           Use GC
+    ──────────────────────────────────────────────────────────────────────────
+    Telescópio            Epsilon 160 (wide-field)          RC 12" (objetos compactos)
+    Alvo                  Nebulosas extensas, cirros,       Galáxias isoladas, aglomerados,
+                          IFN, campos difusos               planetárias
+    Fundo no quadro       Pouco fundo limpo disponível      Fundo dominante e limpo
+    Declinação            ≥ -25°: tentar MGC, verificar     < -30°: GC é default.
+                          cobertura MARS no tool.           -25° a -30°: verificar
+                                                            cobertura caso a caso.
+    Posição galáctica     Fora do plano (|b| > 10°)         Plano galáctico (|b| < 10°)
+    Pré-requisitos        ImageSolver + SPFC                Nenhum adicional
+                          + XMARS (~1.35 GB)
+    Risco                 Pode falhar sem cobertura MARS    Baixo — fallback confiável
+                          mesmo em Dec > -30°
+
+    PROCEDIMENTO PRÁTICO:
+      1. Abrir MGC com a imagem aberta.
+      2. Verificar mensagem de cobertura MARS no console.
+      3. Se cobertura insuficiente → GC.
+      4. Se cobertura OK mas alvo no plano galáctico → ainda preferir GC.
+      5. Caso contrário → MGC.
+
+
+  ── 5.2 Os dois LinearFits — não confundir ───────────────────────────────────
+  [INALTERADO]
+
+    LinearFit    Momento                            Referência              Objetivo
+    ──────────────────────────────────────────────────────────────────────────────
+    LinearFit 1  Entre R, G, B antes do             Canal G                 Igualar nível de fundo dos
+                 ChannelCombination                                         canais de cor entre si
+
+    LinearFit 2  Entre L e RGB antes do             Luminância extraída     Igualar brilho do L ao
+    (opcional)   LRGBCombination                    do RGB                  perfil do RGB. Reject High
+                                                                            = 0.85
+
+
+  ── 5.3 Os dois Channel Combinations — não confundir ─────────────────────────
+  [INALTERADO]
+
+    Processo             Momento                    Espaço de cor    Objetivo
+    ──────────────────────────────────────────────────────────────────────────
+    ChannelCombination   R+G+B lineares →           RGB direto       Montar a imagem colorida linear
+                         RGB linear
+
+    LRGBCombination      L+RGB esticados →          CIE L*a*b*       Fundir luminância processada
+                         LRGB final                                  no RGB já esticado
+
+
+  ── 5.4 Distribuição de tempo de captura LRGB recomendada ────────────────────
+  [INALTERADO]
+
+    Tipo de alvo                    L        RGB total   Justificativa
+    ──────────────────────────────────────────────────────────────────────────
+    Aglomerado aberto (ex: M6)      40%      60%         Cor das estrelas é o elemento principal
+    Nebulosa de emissão/reflexão    50%      50%         Equilíbrio padrão
+    Galáxia com estrutura fina      60-70%   30-40%      Detalhe estrutural domina
+    Objeto muito fraco              70%      30%         Máximo SNR para detalhe sutil
+
+
+  ── 5.5 Decisão Star Separation por tipo de alvo (NOVA) ──────────────────────
+
+    Tipo de alvo                    Separar?    Justificativa
+    ──────────────────────────────────────────────────────────────────────────
+    Galáxias (M51, M101, M104…)     SIM         Estrelas distraem; stretch agressivo precisa
+                                                ser feito sem inflar estrelas
+    Galáxias com estrutura fina     SIM         Máximo ganho — núcleo brilhante + braços
+    (M81, M63, NGC 891)                         fracos beneficiam de processamento separado
+    Nebulosas de emissão            SIM         Stretch da nebulosidade infla estrelas;
+    (M8, M17, M16, Carina)                      LHE/contraste sem ringing
+    Nebulosas de reflexão           SIM         Mesma lógica
+    (M78, Iris, Pleiades neb.)
+    Nebulosas planetárias compactas SIM         Tratamento separado do disco e estrelas de
+                                                campo
+    IFN / cirros galácticos         SIM (forte) Sinal fraquíssimo exige stretch extremo —
+                                                separação é praticamente obrigatória
+    Aglomerados abertos             NÃO         Estrelas SÃO o objeto. Imagem starless seria
+    (M6, M7, M11, M45, NGC 6231)                praticamente vazia.
+    Aglomerados globulares          NÃO         Densidade estelar extrema confunde o SXT;
+    (M22, ω Cen, 47 Tuc)                        e estrelas são o objeto.
+    Cometas                         CASO A CASO Depende se quer destacar a cauda da cabeleira
+                                                vs estrelas de fundo.
+
+    CAVEAT IMPORTANTE: mesmo em aglomerados, SXT pode ser usado APENAS para
+    GERAR star mask (sem usar a starless). É um uso legítimo e poderoso para
+    aumentar saturação só nas estrelas — perfeito para mostrar variedade de
+    cores em M6 (mistura de azuis quentes e laranjas frias).
+
+
+  ── 5.6 Recombinação starless + stars — opções PixelMath (NOVA) ──────────────
+
+    Operação                Expression                          Quando usar
+    ──────────────────────────────────────────────────────────────────────────
+    Screen blending         1 - (1-$T) * (1-stars)              DEFAULT — preserva valores ≤1
+    (recomendado)                                               e evita overflow nos núcleos
+
+    Soma simples            $T + stars                          PERIGOSO — overflow em núcleos
+                                                                saturados gera ringing.
+                                                                Usar SOMENTE se ambas estão muito
+                                                                escuras (sub-stretched).
+
+    Soma com clamp          min(1, $T + stars)                  Funciona mas truncamento gera
+                                                                bordas duras em núcleos.
+
+    Screen com fator        1 - (1-$T) * (1 - stars*k)          k = 0.7-0.9 para reduzir
+                                                                intensidade de estrelas no final
+                                                                (alternativa à redução
+                                                                morfológica).
+
+    NOTA: nas três primeiras, $T é o starless (aplicação da expressão) e
+    "stars" é o nome da imagem de estrelas. Em PixelMath multi-canal, mesma
+    expressão se aplica simetricamente a R, G, B.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  6. MÁSCARAS — Guia de uso (NOVA SEÇÃO)
+════════════════════════════════════════════════════════════════════════════════
+
+  Filosofia: máscara branca = processo passa, máscara preta = processo
+  bloqueado, cinza = parcial. Inverter (Ctrl+Shift+I com máscara ativa) para
+  trocar comportamento.
+
+  ── 6.1 Luminance Mask ───────────────────────────────────────────────────────
+
+    Onde usar:
+      • NXT seletivo (proteger objeto, reduzir só no fundo) — invertida
+      • Curves no objeto sem afetar fundo
+      • Saturation sem amplificar ruído colorido do fundo
+      • Sharpen sem afetar background ruidoso
+
+    Como criar (imagem RGB stretched):
+      1. ChannelExtraction → CIE L*a*b* → Apenas L
+         (ou botão "Extract CIE L* Component" da toolbar)
+      2. Aplicar HT/STF p/ esticar a máscara — fundo bem escuro, objeto bem
+         claro (mais contraste = mais seletividade)
+      3. Opcional: Convolution leve (StdDev 1.5-2) para suavizar transições
+
+    Aplicação:
+      • Arrastar máscara para barra de máscara da imagem-alvo
+      • Imagem fica com tonalidade vermelha onde máscara é preta (=protegido)
+      • Inverter máscara se a proteção estiver no lugar errado
+
+    Caveat: máscara não-linear precisa ser regerada se a imagem-base for
+    re-esticada. Anotar etapa de geração.
+
+
+  ── 6.2 Star Mask ────────────────────────────────────────────────────────────
+
+    Onde usar:
+      • Aumentar saturação só nas estrelas (excelente p/ aglomerados)
+      • Reduzir tamanho de estrelas com MorphologicalTransform
+      • Sharpen seletivo evitando estrelas (mask invertida)
+      • Em narrowband: evitar halos coloridos de multiplicadores em R/B
+
+    Como criar — método moderno (SXT):
+      1. Aplicar SXT na imagem (ou usar a imagem stars já gerada)
+      2. Stretch da imagem stars se ainda linear
+      3. Aplicar binarization OU curve agressiva p/ tornar quase binária
+      4. Convolution leve p/ suavizar bordas
+
+    Como criar — método tradicional (processo StarMask):
+      1. Imagem stretched como base
+      2. Processo StarMask, ajustar Noise threshold, Scale, Smoothness
+      3. Pode precisar combinar 2-3 passes (estrelas brilhantes vs fracas)
+         via PixelMath: max(mask1, mask2, mask3)
+
+    Caveat: stars do SXT capturam estrelas até bem fracas. Star mask muito
+    inclusivo bloqueia processamento em demasiados pixels. Pode ser preciso
+    ajustar com curves para reter só as estrelas que importam para o passo.
+
+
+  ── 6.3 Range Mask ───────────────────────────────────────────────────────────
+
+    Onde usar:
+      • Proteger highlights (núcleos brilhantes) em curves agressivas
+      • Selecionar faixa específica de brilho (mid-tones de uma galáxia)
+      • Criar máscara de núcleo para HDR-like processing
+
+    Como criar:
+      1. Processo RangeSelection (precisa imagem stretched)
+      2. Ativar Real-Time Preview
+      3. Ajustar Lower limit e Upper limit visualmente
+      4. Smoothness: 0.10-0.30 para transições suaves
+
+    Caveat: "Only viably works on non-linear (stretched) images".
+    Não tentar usar antes do MAS.
+
+
+  ── 6.4 Onde encaixar máscaras no workflow ───────────────────────────────────
+
+    Etapa                                        Máscara recomendada
+    ──────────────────────────────────────────────────────────────────────────
+    NXT linear (sem star sep)                    Nenhuma — NXT já é seletivo
+    NXT em starless                              Nenhuma — sem estrelas, sem máscara
+    NXT em stars                                 Nenhuma — todas são estrelas
+    Curves criativas no starless                 Luminance Mask
+    Curves criativas no canal final              Luminance Mask
+    LHE no L_starless                            Luminance Mask
+    ColorSaturation final                        Luminance Mask + opcionalmente Star Mask
+    Boost de cor de estrelas                     Star Mask
+    Redução de tamanho de estrelas               Star Mask (não invertida)
+    Sharpen extra em galáxia/nebulosa            Luminance Mask + Star Mask invertida
+    Limpeza de ruído colorido residual           Luminance Mask invertida
+
+    Para aglomerados (sem star separation): a Star Mask vira a principal
+    ferramenta. Curves + ColorSaturation com Star Mask é onde se realça a
+    diversidade de cor estelar.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  7. REGRAS INQUEBRÁVEIS
+════════════════════════════════════════════════════════════════════════════════
+
+  Regra                                              Motivo
+  ──────────────────────────────────────────────────────────────────────────────
+  BXT Correct Only ANTES de SPCC                     Recomendação oficial RC Astro.
+                                                     PSFs corrigidas → fotometria mais
+                                                     consistente → calibração de cor melhor
+
+  ImageSolver re-solve após Correct Only             Plate solving ganha precisão com
+                                                     PSFs sem aberração
+
+  Gradient Correction ANTES de SPCC                  SPCC precisa de fundo plano para
+                                                     calibrar cor corretamente
+
+  SPFC ANTES de MGC                                  MGC precisa de fluxo físico para
+                                                     comparar com MARS
+
+  BXT SEMPRE antes de NXT                            BXT precisa do ruído gaussiano original
+
+  NXT no RGB combinado, nunca canal por canal        Modo Intensity/Color Separation só
+                                                     funciona em imagem colorida
+
+  ChannelCombination para R+G+B lineares             LRGBCombination opera em Lab —
+                                                     inadequado para dados lineares
+
+  LRGBCombination para L+RGB esticados               ChannelCombination não faz fusão
+                                                     correta em espaço Lab
+
+  Mesmo Target background no MAS (todas variantes)   Garante compatibilidade em
+                                                     LRGBCombination e PixelMath
+
+  Tudo linear ANTES do MAS                           Após o stretch o ruído muda de
+                                                     natureza — processos lineares perdem
+                                                     validade
+
+  NXT no L com Denoise conservador (0.65-0.70)       L carrega o detalhe — redução
+                                                     agressiva destrói informação
+                                                     irrecuperável
+
+  StarXTerminator linear usa Simple Subtraction      Unscreen é exclusivo p/ stretched
+
+  NÃO Auto-Stretch na imagem stars do SXT            Destrói parâmetros STF transferidos
+
+  Recombinação starless+stars via screen blending    Soma simples causa overflow em
+                                                     núcleos saturados → ringing
+
+  BXT NUNCA aplicado em stars separadas              Preservar perfil estelar para
+                                                     recombinação limpa
+
+  NÃO aplicar star separation em aglomerados         Estrelas são o objeto;
+                                                     starless ficaria vazia
+
+  Máscara não-linear regerada se imagem for          Stretch invalida luminance/range
+  re-esticada                                        masks construídas antes
+
+
+════════════════════════════════════════════════════════════════════════════════
+  8. PREMISSAS E LIMITAÇÕES
+════════════════════════════════════════════════════════════════════════════════
+
+  • WBPP configurado com plate solving habilitado e parâmetros corretos de
+    escala de placa por rig.
+
+  • Todas as aplicações de BXT/NXT/SXT/MAS são em MASTERS INTEGRADOS, nunca
+    em subs individuais. (Aplicar em subs gera variação de output por
+    inferência ML e degrada a integração.)
+
+  • XMARS database baixado (~1.35 GB) e configurado no MGC.
+    Versão DR1 v1.1 (mar/2025) ou superior.
+
+  • Catálogo Gaia DR3/SP instalado localmente para SPFC e SPCC.
+
+  • StarXTerminator v2+ com AI atual instalado.
+    Documentar versão do AI nas premissas da sessão p/ reprocessamento.
+
+  • Em céu com poluição luminosa forte, NXT linear pode causar manchas após
+    o stretch — nesse caso mover NXT para após o MAS.
+    (Munhoz Bortle 3-4 — geralmente OK, exceto alvos baixos a sul/SW com
+    light dome de SP-MG.)
+
+  • MAS é ferramenta nova (dez/2025) — se resultado não agradar, GHS é
+    alternativa robusta e estabelecida.
+
+  • Para narrowband (Ha, OIII, SII): workflow muda — cobertura MARS pode ser
+    limitada por filtro, e SPFC requer curvas de transmissão configuradas
+    por filtro narrowband.
+
+  • MGC requer verificação de cobertura MARS no tool antes de uso para
+    qualquer alvo no hemisfério sul. NÃO confiar em regra fixa de declinação.
+
+  • LinearFit 2 (L → RGB) é opcional se MAS foi aplicado com o mesmo
+    Target background em todas as variantes.
+
+  • Star separation NÃO se aplica a aglomerados estelares (5.5). Para
+    aglomerados, SXT serve apenas como gerador de star mask.
+
+  • Processo de star separation pode falhar em aberrações severas. Epsilon
+    160 = óptica excelente, raramente um problema. Se utilizar com rig com
+    coma forte sem correção, espere artefatos.
+
+  • Máscaras NÃO destroem dado — são reversíveis. Pode trocar/remover
+    máscara sem reprocessar a imagem.
+
+  • Convenção de nomenclatura sugerida (para evitar confusão com tantas
+    imagens intermediárias):
+        Alvo_Canal_Estado_Etapa
+      Exemplos:
+        M51_RGB_linear_postBXTcorrect
+        M51_RGB_starless_linear
+        M51_RGB_stars_linear
+        M51_RGB_starless_stretched
+        M51_L_starless_stretched_postLHE
+        M51_LRGB_final
+
+
+════════════════════════════════════════════════════════════════════════════════
+  9. RESUMO VISUAL DO FLUXO
+════════════════════════════════════════════════════════════════════════════════
+
+  RGB:
+    WBPP → BXT Correct Only → ImageSolver → Crop → LinearFit R,G,B →
+    ChannelCombination → SPFC → MGC/GC → SPCC → [PONTO DE BIFURCAÇÃO]
+
+    Se NÃO aglomerado:
+      → SXT linear → [RGB_starless, RGB_stars]
+      RGB_starless:  BXT(0.50-0.60) → NXT(0.85) → MAS → SCNR →
+                     LumMask → Curves → ColorSat
+      RGB_stars:     NXT(0.40-0.50) → MAS(suave)
+      → PixelMath screen blend → RGB_final
+
+    Se aglomerado:
+      → BXT(0.40-0.50) → NXT(0.80-0.90) → MAS → SCNR →
+        StarMask via SXT → Curves+ColorSat com StarMask → RGB_final
+
+  L:
+    WBPP → BXT Correct Only → ImageSolver → Crop → SPFC → MGC/GC →
+    [PONTO DE BIFURCAÇÃO]
+
+    Se NÃO aglomerado:
+      → SXT linear → [L_starless, L_stars]
+      L_starless:    BXT(0.80-0.95) → NXT(0.65-0.70) → MAS →
+                     LumMask → Curves+LHE
+      L_stars:       NXT(0.30-0.40) → MAS(suave)
+      → PixelMath screen blend → L_final
+      → LinearFit p/ RGB_final (opcional)
+
+    Se aglomerado:
+      → BXT(0.50-0.70) → NXT(0.65-0.70) → MAS →
+        Curves leves → L_final
+
+  COMBINAÇÃO:
+    L_final + RGB_final → LRGBCombination → final RGB
+    → StarMask para tweaks finais de cor/tamanho de estrela (todos os alvos)
+    → Curves finais com LumMask
+    → ACDNR chrominance com LumMask invertida (opcional)
+
+
+════════════════════════════════════════════════════════════════════════════════
+  Observatório X93 — Munhoz, MG, Brasil | PixInsight 1.9+ | v2 — Maio 2026
+================================================================================
