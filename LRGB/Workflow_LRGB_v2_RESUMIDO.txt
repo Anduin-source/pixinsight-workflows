@@ -1,0 +1,255 @@
+================================================================================
+  WORKFLOW LRGB v2 — RESUMIDO 
+  Epsilon 160ED + ASI6200MM | Observatório X93 — Munhoz, MG
+  PixInsight 1.9+ | Maio 2026
+================================================================================
+
+
+════════════════════════════════════════════════════════════════════════════════
+  CANAL RGB
+════════════════════════════════════════════════════════════════════════════════
+
+  #   Processo                  Configuração
+  ─────────────────────────────────────────────────────────────────────────────
+  1   WBPP                      Plate solving habilitado
+
+  2   BlurXTerminator           Sharpen Stars=0 | Sharpen Nonstellar=0
+      (Correct Only — aplicar   Correct Only=MARCADO
+      em CADA canal R, G, B)    Automatic PSF=MARCADO
+
+  3   ImageSolver               Re-solve cada canal após Correct Only
+
+  4   DynamicCrop               Manual se necessário
+
+  5   LinearFit (R, G, B)       Referência=G | Reject Low=0 | Reject High=0.92
+
+  6   ChannelCombination        R+G+B → RGB linear
+
+  7   SPFC                      QE=Sony IMX455 | Filtros=Chroma RGB+L
+                                Gaia DR3/SP | Auto limit mag=MARCADO
+
+  8   MGC ou GC                 Abrir MGC e verificar cobertura MARS no console.
+                                Sem cobertura ou |b|<10° → GC.
+                                MGC: Gradient scale=256 | Structure separation=3
+
+  9   SPCC                      White ref=Average Spiral Galaxy (nebulosas)
+                                Background Neutralization=MARCADO
+                                Gaia DR3/SP | Auto limit mag=MARCADO
+
+  10  StarXTerminator           Generate Star Image=MARCADO
+      (linear)                  Unscreen Stars=DESMARCADO
+                                Large Overlap=MARCADO
+                                → Gera RGB_starless + RGB_stars
+                                NÃO aplicar Auto-Stretch em RGB_stars
+
+  ───── RGB_starless ─────
+
+  11s BlurXTerminator           Sharpen Nonstellar=0.50-0.60
+                                Automatic PSF=MARCADO
+
+  12s NoiseXTerminator          Intensity/Color Separation=MARCADO
+                                Denoise=0.85 | Iterations=1
+
+  13s MultiscaleAdaptiveStretch Target background=0.13 (ANOTAR)
+                                Aggressiveness=0.70
+                                Contrast Recovery=MARCADO | Intensity=0.55
+                                Scale separation=512 | Color Saturation=MARCADO
+
+  14s SCNR                      Color=Green | Method=Average Neutral
+                                Amount=0.75 | Preserve lightness=MARCADO
+
+  15s Extract Lightness         Botão "Extract CIE L*" → mask_RGB
+                                HT na máscara: esticar contraste
+                                (preto no fundo, branco no objeto)
+
+  16s CurvesTransformation      COM mask_RGB aplicada
+                                Contraste e saturação no objeto
+
+  17s ColorSaturation           COM mask_RGB aplicada
+
+  ───── RGB_stars ─────
+
+  11r NoiseXTerminator          Intensity/Color Separation=MARCADO
+                                Denoise=0.45 | Iterations=1
+
+  12r MultiscaleAdaptiveStretch Target background=MESMO do starless (0.13)
+                                Aggressiveness=0.50
+                                Color Saturation=MARCADO
+
+  ───── Recombinação ─────
+
+  18  PixelMath                 Expression: 1 - (1-$T) * (1-RGB_stars)
+                                $T = RGB_starless (aplicar nele)
+                                → RGB_final
+
+
+════════════════════════════════════════════════════════════════════════════════
+  CANAL L
+════════════════════════════════════════════════════════════════════════════════
+
+  #   Processo                  Configuração
+  ─────────────────────────────────────────────────────────────────────────────
+  1   WBPP                      Mesmo template do RGB
+
+  2   BlurXTerminator           Sharpen Stars=0 | Sharpen Nonstellar=0
+      (Correct Only)            Correct Only=MARCADO
+
+  3   ImageSolver               Re-solve
+
+  4   DynamicCrop               Manual se necessário
+
+  5   SPFC                      Igual ao RGB (somente se for usar MGC)
+
+  6   MGC ou GC                 Mesma escolha do RGB
+
+  7   StarXTerminator           Generate Star Image=MARCADO
+      (linear)                  Unscreen Stars=DESMARCADO
+                                Large Overlap=MARCADO
+                                → L_starless + L_stars
+
+  ───── L_starless ─────
+
+  8s  BlurXTerminator           Sharpen Nonstellar=0.85
+                                Automatic PSF=MARCADO
+
+  9s  NoiseXTerminator          Intensity/Color Separation=DESMARCADO (mono)
+                                Denoise=0.68 | Iterations=1
+
+  10s MultiscaleAdaptiveStretch Target background=MESMO do RGB (0.13)
+                                Aggressiveness=0.70
+                                Contrast Recovery=MARCADO | Intensity=0.50
+                                Color Saturation=DESMARCADO
+
+  11s Duplicate + HT → mask_L   Esticar contraste para usar como máscara
+
+  12s CurvesTransformation      COM mask_L aplicada
+                                Contraste estrutural
+
+  13s LocalHistogramEqualization COM mask_L aplicada
+                                Amount=0.15 (não exagerar)
+
+  ───── L_stars ─────
+
+  8r  NoiseXTerminator          Intensity/Color Separation=DESMARCADO
+                                Denoise=0.35
+
+  9r  MultiscaleAdaptiveStretch Target background=MESMO (0.13)
+                                Aggressiveness=0.50
+
+  ───── Recombinação ─────
+
+  14  PixelMath                 Expression: 1 - (1-$T) * (1-L_stars)
+                                → L_final
+
+  15  LinearFit (opcional)      Referência=luminância extraída de RGB_final
+                                Reject High=0.85
+
+
+════════════════════════════════════════════════════════════════════════════════
+  COMBINAÇÃO FINAL
+════════════════════════════════════════════════════════════════════════════════
+
+  #   Processo               Configuração
+  ─────────────────────────────────────────────────────────────────────────────
+  1   LRGBCombination        Aplicar SOBRE RGB_final
+                             L=L_final | R=DESMARCADO | G=DESMARCADO | B=DESMARCADO
+                             Chrominance Noise Reduction=MARCADO
+                             Saturation=0.5 | Lightness=0.5
+
+  2   Criar Star Mask final  De RGB_stars ou L_stars stretched:
+                             Curves agressiva ou Binarization leve
+                             Convolution StdDev=1.5 (suavizar)
+
+  3   CurvesTransformation   COM Star Mask aplicada
+      (cor das estrelas)     Boost de saturação
+
+  4   MorphologicalTransform COM Star Mask aplicada
+      (opcional)             Operator=Erosion | Amount=0.10
+                             Reduz estrelas — não exagerar
+
+  5   CurvesTransformation   COM mask_L (luminância) final
+      (ajustes finais)
+
+  6   ACDNR (opcional)       COM mask_L INVERTIDA
+                             Tab Chrominance=MARCADO | Lightness=DESMARCADO
+                             StdDev=2 | Amount=0.50
+                             Limpa ruído colorido residual do fundo
+
+
+════════════════════════════════════════════════════════════════════════════════
+  REFERÊNCIA RÁPIDA — Parâmetros principais
+════════════════════════════════════════════════════════════════════════════════
+
+  BXT
+    Correct Only (R,G,B,L mono)  Stars=0 | Nonstellar=0 | Correct Only=ON
+    RGB starless                 Nonstellar=0.50-0.60
+    L starless                   Nonstellar=0.80-0.95
+    NUNCA aplicar em imagens stars
+
+  NXT
+    RGB starless                 IntColor=ON | Denoise=0.85-0.90
+    RGB stars                    IntColor=ON | Denoise=0.40-0.50
+    L starless                   IntColor=OFF | Denoise=0.65-0.70
+    L stars                      IntColor=OFF | Denoise=0.30-0.40
+
+  MAS
+    TODAS variantes              MESMO Target background (ex: 0.13)
+    starless                     Aggressiveness=0.70
+    stars                        Aggressiveness=0.50
+    Contrast Recovery            Marcado | Intensity=0.50-0.60 | Scale=512
+    Color Saturation             ON em RGB | OFF em L
+
+  SXT (linear)                   Generate Star=ON | Unscreen=OFF | Large Overlap=ON
+
+  SPFC                           QE=Sony IMX411/455 | Auto limit mag=ON
+
+  SPCC                           White ref=Avg Spiral Galaxy (nebulosas)
+                                 Background Neutralization=ON
+
+
+════════════════════════════════════════════════════════════════════════════════
+  REGRAS CRÍTICAS
+════════════════════════════════════════════════════════════════════════════════
+
+  • BXT Correct Only ANTES de SPCC
+  • Gradient Correction ANTES de SPCC
+  • SPFC ANTES de MGC
+  • BXT SEMPRE antes de NXT
+  • Tudo linear ANTES do MAS
+  • MESMO Target background no MAS em todas as variantes
+  • SXT linear → Unscreen DESMARCADO (Simple Subtraction implícito)
+  • NÃO Auto-Stretch na imagem stars após SXT
+  • Recombinação via screen blending (NUNCA soma simples)
+  • BXT NUNCA em imagens stars separadas
+  • ChannelCombination para lineares | LRGBCombination para stretched
+  • Máscara não-linear regerada se imagem for re-esticada
+
+
+════════════════════════════════════════════════════════════════════════════════
+  EXPRESSÕES PixelMath
+════════════════════════════════════════════════════════════════════════════════
+
+  Recombinação (default):
+    1 - (1-$T) * (1-stars_image)
+    [aplicar com $T = starless | stars_image = nome real da imagem stars]
+
+  Recombinação com redução de estrelas:
+    1 - (1-$T) * (1 - stars_image * 0.8)
+
+
+════════════════════════════════════════════════════════════════════════════════
+  NOMENCLATURA SUGERIDA
+════════════════════════════════════════════════════════════════════════════════
+
+  Alvo_Canal_Estado_Etapa
+    M17_RGB_linear
+    M17_RGB_starless_linear
+    M17_RGB_stars_linear
+    M17_RGB_starless_stretched
+    M17_L_starless_stretched_postLHE
+    M17_LRGB_final
+
+
+════════════════════════════════════════════════════════════════════════════════
+  Versão resumida — para versão completa com justificativas ver v2 completo
+================================================================================

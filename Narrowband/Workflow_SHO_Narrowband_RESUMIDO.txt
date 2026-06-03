@@ -1,0 +1,401 @@
+================================================================================
+  WORKFLOW NARROWBAND SHO — RESUMIDO (paleta Hubble)
+  Epsilon 160ED + ASI6200MM | Observatório X93 — Munhoz, MG
+  Filtros: Chroma Ha 3nm + OIII 3nm + SII 3nm
+  PixInsight 1.9+ | Maio 2026
+
+  Mapeamento: SII → R | Ha → G | OIII → B
+================================================================================
+
+
+════════════════════════════════════════════════════════════════════════════════
+  FASE 1 — PROCESSAMENTO POR CANAL (Ha, OIII, SII separados, lineares)
+════════════════════════════════════════════════════════════════════════════════
+
+  #   Processo                  Configuração
+  ─────────────────────────────────────────────────────────────────────────────
+  1   WBPP                      Plate solving habilitado
+                                Frame de referência ÚNICO p/ os 3 canais NB
+                                (e p/ RGB de estrelas se for capturar)
+
+  2   BlurXTerminator           Sharpen Stars=0 | Sharpen Nonstellar=0
+      (Correct Only —           Correct Only=MARCADO
+      aplicar em CADA canal     Automatic PSF=MARCADO
+      Ha, OIII, SII)            Faz por canal pois aberrações podem variar
+                                ligeiramente entre filtros.
+
+  3   ImageSolver               Re-solve cada canal após Correct Only
+
+  4   DynamicCrop               Manual; aplicar o MESMO crop nos 3 canais
+                                (usar como Process Container)
+
+  5   GradientCorrection (GC)   Default p/ narrowband — MGC tem cobertura
+      em cada canal             MARS limitada por filtro NB.
+                                Smoothness=0.25 | Scale=1024
+
+      (alternativa MGC          Se for tentar MGC: SPFC antes (com curvas
+      experimental)             de transmissão NB configuradas), e verificar
+                                cobertura no console. Falha → cair p/ GC.
+
+  6   LinearFit                 Referência = canal MAIS FRACO (geralmente
+      (entre Ha, OIII, SII)     OIII ou SII; verificar com Statistics).
+                                Reject Low=0 | Reject High=0.92
+                                NB: usar canal fraco como ref evita perda
+                                de SNR — invertido em relação ao LRGB.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  FASE 2 — COMBINAÇÃO E CALIBRAÇÃO
+════════════════════════════════════════════════════════════════════════════════
+
+  #   Processo                  Configuração
+  ─────────────────────────────────────────────────────────────────────────────
+  7   ChannelCombination        Color Space=RGB
+      (SHO linear)              R = SII | G = Ha | B = OIII
+                                Resultado: imagem SHO linear (verde dominante)
+                                Renomear: alvo_SHO_linear
+
+  8   BlurXTerminator           Sharpen Stars=0.20-0.30
+      (sharpening na SHO        Sharpen Nonstellar=0.50-0.65
+      combinada)                Automatic PSF=MARCADO
+                                Faz na SHO combinada (não por canal) pois
+                                BXT precisa relação entre canais.
+
+  9   NoiseXTerminator          Intensity/Color Separation=MARCADO
+      (na SHO combinada)        Denoise=0.85-0.90
+                                Iterations=1
+                                NXT lida bem com SNR díspar entre canais NB.
+
+  10  SPCC (OPCIONAL p/ SHO)    Para SHO criativa, geralmente PULAR.
+                                NarrowbandNormalization (passo 16) faz
+                                trabalho melhor.
+
+                                Se usar mesmo assim:
+                                  Narrowband Filters mode=MARCADO
+                                  Red:   wavelength=672.4 | bandwidth=3 (SII)
+                                  Green: wavelength=656.3 | bandwidth=3 (Ha)
+                                  Blue:  wavelength=500.7 | bandwidth=3 (OIII)
+                                  White reference=Photon Flux
+                                  Background Neutralization=MARCADO
+                                  Optimize for stars=MARCADO
+
+
+════════════════════════════════════════════════════════════════════════════════
+  FASE 3 — STAR SEPARATION
+════════════════════════════════════════════════════════════════════════════════
+
+  #   Processo                  Configuração
+  ─────────────────────────────────────────────────────────────────────────────
+  11  StarXTerminator           Generate Star Image=MARCADO
+      (na SHO combinada,        Unscreen Stars=DESMARCADO (linear)
+      ainda linear)             Large Overlap=MARCADO
+                                → SHO_starless + SHO_stars
+                                Estrelas NB geralmente ficam magenta/feias —
+                                serão tratadas separadamente ou substituídas
+                                por RGB stars.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  FASE 4 — PROCESSAMENTO SHO_starless
+════════════════════════════════════════════════════════════════════════════════
+
+  #   Processo                  Configuração
+  ─────────────────────────────────────────────────────────────────────────────
+  12  MultiscaleAdaptiveStretch Target background=0.13 (ANOTAR)
+                                Aggressiveness=0.70
+                                Contrast Recovery=MARCADO | Intensity=0.55
+                                Scale separation=512
+                                Color Saturation=MARCADO
+                                Resultado: SHO starless stretched (verde
+                                dominante esperado — Ha vai p/ G)
+
+  13  SCNR (preliminar leve)    Color=Green | Average Neutral
+                                Amount=0.30-0.40 (LEVE — não matar Ha agora)
+                                Preserve lightness=MARCADO
+
+  14  Background Neutralization Reference image=preview em área limpa de
+      (se SPCC não foi feito)   fundo (sem nebulosa, sem estrelas residuais)
+                                Upper limit=valor max do preview + 0.02
+
+  ───── Aqui começa a parte criativa da paleta Hubble ─────
+
+  15  NarrowbandNormalization   Palette=SHO
+      (RECOMENDADO)             Ativar Real-Time Preview
+                                Ajustar sliders OIII, SII boost até atingir
+                                tom Hubble desejado (azul-laranja-bege).
+                                Ferramenta de Bill Blanshan/Mike Cranfield
+                                (ago/2025) — substitui PixelMath manual.
+
+      Instalação (se ainda não): Resources → Updates → Manage Repositories
+                                 → Add: cosmicphotons.com/pi-modules/
+                                        narrowbandnormalization/
+
+  16  (Alternativa manual ao 15)  PixelMath — Bill Blanshan classic SHO boost:
+                                  R: med($T[0],$T[1],$T[2]) +
+                                     ~med($T[0],$T[1],$T[2]) * $T[0]
+                                  G: med($T[0],$T[1],$T[2]) +
+                                     ~med($T[0],$T[1],$T[2]) * $T[1]
+                                  B: med($T[0],$T[1],$T[2]) +
+                                     ~med($T[0],$T[1],$T[2]) * $T[2]
+                                  Reduz dominância de Ha mantendo estrutura.
+
+  17  SCNR final no starless    Color=Green | Average Neutral
+                                Amount=0.60-0.80
+                                Preserve lightness=MARCADO
+
+  18  CurvesTransformation      COM Luminance Mask aplicada
+      (criativo)                Boost de saturação no objeto
+                                Hue shift se desejar (laranja vs amarelo no
+                                Ha, azul vs ciano no OIII)
+                                Extract CIE L* da própria SHO_starless
+                                stretched p/ criar a máscara.
+
+  19  ColorSaturation           COM Luminance Mask aplicada
+                                Trabalhar por faixas de hue específicas
+                                (boost de azul/ciano do OIII; amarelo/dourado
+                                de regiões SII-ricas)
+
+
+════════════════════════════════════════════════════════════════════════════════
+  FASE 5 — PROCESSAMENTO DAS ESTRELAS (3 opções)
+════════════════════════════════════════════════════════════════════════════════
+
+  Decidir entre:
+    OPÇÃO A: Usar SHO_stars (rápido, estrelas magenta/desaturadas)
+    OPÇÃO B: RGB stars reais (broadband subs separados — melhor resultado)
+    OPÇÃO C: RGB stars sintéticas via PixelMath (compromisso)
+
+  ──────────────────────────────────────────────────────────────────────────
+  OPÇÃO A — Usar SHO_stars direto
+  ──────────────────────────────────────────────────────────────────────────
+
+  20a NoiseXTerminator no       Intensity/Color Separation=MARCADO
+      SHO_stars                 Denoise=0.40 | Iterations=1
+
+  21a MultiscaleAdaptiveStretch Target background=MESMO do starless (0.13)
+      no SHO_stars              Aggressiveness=0.50
+                                Color Saturation=MARCADO
+
+  22a Hue shift nas estrelas    CurvesTransformation em modo Hue
+                                Shift magenta → branco/amarelo
+                                Reduz cor não-natural das estrelas NB
+
+  ──────────────────────────────────────────────────────────────────────────
+  OPÇÃO B — RGB stars reais (RECOMENDADO p/ resultado final)
+  ──────────────────────────────────────────────────────────────────────────
+
+  Pré-requisito: capturar tb subs RGB (mesmo curtas, ~30s, ~30 min total
+                 por canal) p/ ter cor real de estrelas.
+
+  20b WBPP nos masters RGB      Mesmo frame de referência da SHO
+
+  21b Processar RGB → RGB_linear ChannelCombination dos masters R,G,B
+                                após LinearFit interno (ref=G)
+                                + GC + SPCC (broadband mode)
+
+  22b StarXTerminator no        Generate Star Image=MARCADO
+      RGB_linear                Unscreen Stars=DESMARCADO
+                                → guardar APENAS RGB_stars (descartar starless)
+
+  23b MultiscaleAdaptiveStretch Target background=MESMO da SHO (0.13)
+      no RGB_stars              Aggressiveness=0.50
+                                Color Saturation=MARCADO
+
+  24b (opcional) Reduzir tamanho MorphologicalTransform com Star Mask
+      de estrelas               Operator=Erosion | Amount=0.10-0.15
+
+  ──────────────────────────────────────────────────────────────────────────
+  OPÇÃO C — RGB stars sintéticas a partir da SHO (sem captura RGB)
+  ──────────────────────────────────────────────────────────────────────────
+
+  20c PixelMath nos canais      Combinar canais NB lineares em paleta
+      NB stretched              que aproxima broadband:
+                                  R = Ha
+                                  G = OIII*0.5 + SII*0.5
+                                  B = OIII
+                                Resultado: imagem aprox. broadband
+
+  21c MAS + StarXTerminator     Stretch + extrair stars dessa imagem
+                                Usar como RGB_stars sintética
+
+  22c (alternativa pronta)      Seti Astro "NB to RGB Star Combination"
+                                script — gera RGB stars sintéticas
+                                automaticamente a partir da SHO.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  FASE 6 — RECOMBINAÇÃO
+════════════════════════════════════════════════════════════════════════════════
+
+  #   Processo                  Configuração
+  ─────────────────────────────────────────────────────────────────────────────
+  25  PixelMath                 Expression: 1 - (1-$T) * (1-stars_image)
+      (screen blending)         $T = SHO_starless (aplicação)
+                                stars_image = SHO_stars, RGB_stars ou
+                                              RGB_stars_sint conforme opção
+                                → SHO_final
+
+  26  Criar Star Mask final     De stars_image stretched:
+                                Curves agressiva ou Binarization leve
+                                Convolution StdDev=1.5 (suavizar)
+
+  27  CurvesTransformation      COM Star Mask aplicada
+      ajustes nas estrelas      Saturação e brilho de estrelas
+                                Se Opção A (SHO stars): pode shift de hue
+                                p/ corrigir magenta
+
+  28  CurvesTransformation      COM Luminance Mask aplicada
+      ajustes finais            Contraste e saturação finais
+
+  29  ACDNR chrominance         COM Luminance Mask INVERTIDA
+      (opcional)                Tab Chrominance=MARCADO | Lightness=DESMARCADO
+                                StdDev=2 | Amount=0.50
+                                Limpa ruído colorido residual do fundo
+
+
+════════════════════════════════════════════════════════════════════════════════
+  REFERÊNCIA RÁPIDA — Parâmetros principais
+════════════════════════════════════════════════════════════════════════════════
+
+  Mapeamento Hubble (SHO)
+    SII → R | Ha → G | OIII → B
+
+  BXT
+    Correct Only (cada canal NB mono)   Stars=0 | Nonstellar=0 | Correct Only=ON
+    Sharpening na SHO combinada         Stars=0.20-0.30 | Nonstellar=0.50-0.65
+    Nas estrelas separadas              NUNCA aplicar
+
+  NXT
+    SHO_starless                        IntColor=ON | Denoise=0.85-0.90
+    SHO_stars                           IntColor=ON | Denoise=0.40
+
+  MAS
+    SHO_starless                        Target bg=0.13 | Aggress=0.70 | ColorSat=ON
+    SHO_stars / RGB_stars               Mesmo Target bg | Aggress=0.50 | ColorSat=ON
+    Contrast Recovery                   ON | Intensity=0.50-0.60 | Scale=512
+
+  LinearFit (entre canais NB)
+    Referência                          Canal MAIS FRACO (inverso do LRGB)
+    Reject Low=0 | Reject High=0.92
+
+  SXT (linear)
+    Generate Star=ON | Unscreen=OFF | Large Overlap=ON
+
+  SPCC NB (se usar)
+    Narrowband Filters mode=ON
+    R(SII)=672.4nm/3 | G(Ha)=656.3nm/3 | B(OIII)=500.7nm/3
+    White ref=Photon Flux
+    Optimize for stars=ON
+
+  Gradient Correction
+    Default                             GC (cobertura MARS NB limitada)
+    Smoothness=0.25 | Scale=1024
+
+
+════════════════════════════════════════════════════════════════════════════════
+  REGRAS CRÍTICAS
+════════════════════════════════════════════════════════════════════════════════
+
+  • BXT Correct Only EM CADA canal NB ANTES de combinar
+  • BXT sharpening DEPOIS da combinação (precisa relação entre canais)
+  • LinearFit: referência = canal MAIS FRACO (oposto do LRGB)
+  • MGC raramente funciona em NB — usar GC por default
+  • SPCC narrowband é p/ aproximar broadband (HOO) — em SHO criativa, pular
+  • NarrowbandNormalization > SPCC para paleta Hubble
+  • Tudo linear ANTES do MAS
+  • Estrelas NB ficam feias — substituir por RGB ou hue-shift
+  • BXT NUNCA em imagens stars separadas
+  • Recombinação via screen blending
+  • Mesmo Target background no MAS em todas as variantes
+  • SCNR Green em DUAS passadas: leve (0.3-0.4) antes da paleta, forte
+    (0.6-0.8) depois — Ha vai p/ verde, então SCNR Green = ferramenta-chave
+
+
+════════════════════════════════════════════════════════════════════════════════
+  EXPRESSÕES PixelMath
+════════════════════════════════════════════════════════════════════════════════
+
+  Recombinação starless+stars (screen):
+    1 - (1-$T) * (1-stars_image)
+
+  RGB stars sintéticas a partir de NB (Opção C):
+    R: Ha
+    G: OIII*0.5 + SII*0.5
+    B: OIII
+
+  Bill Blanshan SHO boost (alternativa ao NarrowbandNormalization):
+    R: med($T[0],$T[1],$T[2]) + ~med($T[0],$T[1],$T[2]) * $T[0]
+    G: med($T[0],$T[1],$T[2]) + ~med($T[0],$T[1],$T[2]) * $T[1]
+    B: med($T[0],$T[1],$T[2]) + ~med($T[0],$T[1],$T[2]) * $T[2]
+
+  Continuum subtraction (separar Ha puro de continuum, avançado):
+    Ha_pure = Ha - k * R_broadband
+    [k tipicamente 0.05-0.15, ajustar visualmente]
+
+
+════════════════════════════════════════════════════════════════════════════════
+  PALETAS NB — Mapeamentos comuns (referência)
+════════════════════════════════════════════════════════════════════════════════
+
+  Paleta              R           G               B          Característica
+  ──────────────────────────────────────────────────────────────────────────────
+  SHO (Hubble)        SII         Ha              OIII       Default deste workflow
+                                                             Verde→Ha; ajuste p/
+                                                             dourado-azul típico
+
+  HOO                 Ha          OIII            OIII       Bicolor — só Ha+OIII
+                                                             Aproximação broadband
+
+  Foraxx              Ha          OIII*0.5+Ha*0.5 OIII       Variante "mais natural"
+                                                             do SHO
+
+  HSO                 Ha          SII             OIII       Realça SII (R→amarelo)
+
+  Bicolor             Ha+SII*0.3  OIII            OIII*0.5+Ha*0.2  Custom
+
+
+════════════════════════════════════════════════════════════════════════════════
+  NOMENCLATURA SUGERIDA
+════════════════════════════════════════════════════════════════════════════════
+
+  Alvo_Canal_Estado_Etapa
+    NGC6888_Ha_linear
+    NGC6888_OIII_linear
+    NGC6888_SII_linear
+    NGC6888_SHO_linear
+    NGC6888_SHO_starless_linear
+    NGC6888_SHO_stars_linear
+    NGC6888_SHO_starless_postNBN  (pós NarrowbandNormalization)
+    NGC6888_RGB_stars_stretched
+    NGC6888_SHO_final
+
+
+════════════════════════════════════════════════════════════════════════════════
+  PREMISSAS / OBSERVAÇÕES
+════════════════════════════════════════════════════════════════════════════════
+
+  • Tempo de captura sugerido NB: Ha geralmente forte (2-3h é suficiente),
+    OIII e SII precisam mais (4-6h cada) por SNR menor.
+
+  • Se for capturar RGB de estrelas: 20-40 min total por canal já suficiente.
+    Lua não atrapalha tanto (só p/ cor estelar).
+
+  • Para alvos com OIII halos (estrelas brilhantes em Cygnus, p.ex.): 
+    considerar Opção B (RGB stars) obrigatoriamente — halos OIII ficam
+    horrendos em SHO_stars direto.
+
+  • NarrowbandNormalization (passo 15) é a evolução moderna do workflow SHO.
+    Se a ferramenta não estiver instalada, vale a pena instalar antes de
+    processar — economiza muito tempo de tweaking manual.
+
+  • MGC com filtros NB: cobertura MARS por filtro é limitada. SPFC tb
+    requer curvas de transmissão NB configuradas. Em geral GC vence em
+    confiabilidade p/ NB.
+
+  • Alvos sul (Munhoz Dec ~-22°): adicionalmente, cobertura MARS hemisfério
+    sul ainda incompleta. Reforça GC como default p/ NB.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  Versão resumida — Workflow SHO Narrowband | Maio 2026
+================================================================================
